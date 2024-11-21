@@ -37,7 +37,47 @@ directly from Google. Use is subject to these
 
 See the [installation documentation](docs/installation.md).
 
+```
+# nano CMakeLists.txt # 用文本编辑器打开源代码下的CMakelists.txt
+# 在里面18行添加 `set(CMAKE_CXX_FLAGS -lz)`,保存并关闭
+conda create -n af3 python=3.11 # af3在python3.11上通过测试
+conda activate af3 # 激活af3环境
+conda install -c bioconda hmmer # 安装hmmer
+pip install -r dev-requirements.txt 
+pip install . --no-deps # --verbose 可选,如果安装出错,使用verbose选项查看具体错误
+build_data # 构建cif数据库
+python run_alphafold_test.py # 由于暂时没有模型参数,仅序列搜索测试成功
+
+# jax库GPU检测测试
+python
+import jax
+jax.devices()
+# 返回结果中包含cuda表明jax正确检测到了GPU设置
+from jax.lib import xla_bridge
+xla_bridge.get_backend().platform
+# 返回结果中包含gpu表明jaxlib正确检测到了GPU设置
+# CTRL+D退出
+
+# 基因(序列)数据库下载,极其耗时,推荐使用SSD存储,加快下载和序列搜索的速度
+# 压缩包大小252GB,解压后为630GB
+python fetch_databases.py --download_destination=存放数据库的路径
+sudo chmod 755 --recursive 存放数据库的路径 # 给MSA工具提供权限
+```
+
+### 环境变量设置
+
+> > 终端环境变量配置: 使用任意文本编辑器,打开`~/.bashrc`,添加下面内容并保存
+> 
+> ```
+> export XLA_FLAGS="--xla_gpu_enable_triton_gemm=false" 
+> export XLA_PYTHON_CLIENT_PREALLOCATE=true
+> export XLA_CLIENT_MEM_FRACTION=0.95
+> ```
+
+**MMSeqs2-GPU installation** see: [mmseqs2_user_guide](MMseqs2_user_guide.md)
+
 Once you have installed AlphaFold 3, you can test your setup using e.g. the
+
 following input JSON file named `alphafold_input.json`:
 
 ```json
@@ -60,28 +100,18 @@ following input JSON file named `alphafold_input.json`:
 You can then run AlphaFold 3 using the following command:
 
 ```
-docker run -it \
-    --volume $HOME/af_input:/root/af_input \
-    --volume $HOME/af_output:/root/af_output \
-    --volume <MODEL_PARAMETERS_DIR>:/root/models \
-    --volume <DATABASES_DIR>:/root/public_databases \
-    --gpus all \
-    alphafold3 \
-    python run_alphafold.py \
-    --json_path=/root/af_input/fold_input.json \
-    --model_dir=/root/models \
-    --output_dir=/root/af_output
+python run_alphafold.py --buckets '256,512,768,1024' --flash_attention_implementation xla --mmseqs2_use_gpu=true --input_dir examples --output_dir examples/output
 ```
 
 There are various flags that you can pass to the `run_alphafold.py` command, to
 list them all run `python run_alphafold.py --help`. Two fundamental flags that
 control which parts AlphaFold 3 will run are:
 
-*   `--run_data_pipeline` (defaults to `true`): whether to run the data
-    pipeline, i.e. genetic and template search. This part is CPU-only, time
-    consuming and could be run on a machine without a GPU.
-*   `--run_inference` (defaults to `true`): whether to run the inference. This
-    part requires a GPU.
+* `--run_data_pipeline` (defaults to `true`): whether to run the data
+  pipeline, i.e. genetic and template search. This part is CPU-only, time
+  consuming and could be run on a machine without a GPU.
+* `--run_inference` (defaults to `true`): whether to run the inference. This
+  part requires a GPU.
 
 ## AlphaFold 3 Input
 
@@ -138,24 +168,24 @@ We also extend our gratitude to our collaborators at Google and Isomorphic Labs.
 
 AlphaFold 3 uses the following separate libraries and packages:
 
-*   [abseil-cpp](https://github.com/abseil/abseil-cpp) and
-    [abseil-py](https://github.com/abseil/abseil-py)
-*   [Chex](https://github.com/deepmind/chex)
-*   [Docker](https://www.docker.com)
-*   [DSSP](https://github.com/PDB-REDO/dssp)
-*   [HMMER Suite](https://github.com/EddyRivasLab/hmmer)
-*   [Haiku](https://github.com/deepmind/dm-haiku)
-*   [JAX](https://github.com/google/jax/)
-*   [jax-triton](https://github.com/jax-ml/jax-triton)
-*   [jaxtyping](https://github.com/patrick-kidger/jaxtyping)
-*   [libcifpp](https://github.com/pdb-redo/libcifpp)
-*   [NumPy](https://github.com/numpy/numpy)
-*   [pybind11](https://github.com/pybind/pybind11) and
-    [pybind11_abseil](https://github.com/pybind/pybind11_abseil)
-*   [RDKit](https://github.com/rdkit/rdkit)
-*   [Tree](https://github.com/deepmind/tree)
-*   [Triton](https://github.com/triton-lang/triton)
-*   [tqdm](https://github.com/tqdm/tqdm)
+* [abseil-cpp](https://github.com/abseil/abseil-cpp) and
+  [abseil-py](https://github.com/abseil/abseil-py)
+* [Chex](https://github.com/deepmind/chex)
+* [Docker](https://www.docker.com)
+* [DSSP](https://github.com/PDB-REDO/dssp)
+* [HMMER Suite](https://github.com/EddyRivasLab/hmmer)
+* [Haiku](https://github.com/deepmind/dm-haiku)
+* [JAX](https://github.com/google/jax/)
+* [jax-triton](https://github.com/jax-ml/jax-triton)
+* [jaxtyping](https://github.com/patrick-kidger/jaxtyping)
+* [libcifpp](https://github.com/pdb-redo/libcifpp)
+* [NumPy](https://github.com/numpy/numpy)
+* [pybind11](https://github.com/pybind/pybind11) and
+  [pybind11_abseil](https://github.com/pybind/pybind11_abseil)
+* [RDKit](https://github.com/rdkit/rdkit)
+* [Tree](https://github.com/deepmind/tree)
+* [Triton](https://github.com/triton-lang/triton)
+* [tqdm](https://github.com/tqdm/tqdm)
 
 We thank all their contributors and maintainers!
 
@@ -221,42 +251,42 @@ The following databases have been: (1) mirrored by Google DeepMind; and (2) in
 part, included with the inference code package for testing purposes, and are
 available with reference to the following:
 
-*   [BFD](https://bfd.mmseqs.com/) (modified), by Steinegger M. and Söding J.,
-    modified by Google DeepMind, available under a
-    [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/deed.en).
-    See the Methods section of the
-    [AlphaFold proteome paper](https://www.nature.com/articles/s41586-021-03828-1)
-    for details.
-*   [PDB](https://wwpdb.org) (unmodified), by H.M. Berman et al., available free
-    of all copyright restrictions and made fully and freely available for both
-    non-commercial and commercial use under
-    [CC0 1.0 Universal (CC0 1.0) Public Domain Dedication](https://creativecommons.org/publicdomain/zero/1.0/).
-*   [MGnify: v2022\_05](https://ftp.ebi.ac.uk/pub/databases/metagenomics/peptide_database/2022_05/README.txt)
-    (unmodified), by Mitchell AL et al., available free of all copyright
-    restrictions and made fully and freely available for both non-commercial and
-    commercial use under
-    [CC0 1.0 Universal (CC0 1.0) Public Domain Dedication](https://creativecommons.org/publicdomain/zero/1.0/).
-*   [UniProt: 2021\_04](https://www.uniprot.org/) (unmodified), by The UniProt
-    Consortium, available under a
-    [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/deed.en).
-*   [UniRef90: 2022\_05](https://www.uniprot.org/) (unmodified) by The UniProt
-    Consortium, available under a
-    [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/deed.en).
-*   [NT: 2023\_02\_23](https://www.ncbi.nlm.nih.gov/nucleotide/) (modified) See
-    the Supplementary Information of the
-    [AlphaFold 3 paper](https://nature.com/articles/s41586-024-07487-w) for
-    details.
-*   [RFam: 14\_4](https://rfam.org/) (modified), by I. Kalvari et al., available
-    free of all copyright restrictions and made fully and freely available for
-    both non-commercial and commercial use under
-    [CC0 1.0 Universal (CC0 1.0) Public Domain Dedication](https://creativecommons.org/publicdomain/zero/1.0/).
-    See the Supplementary Information of the
-    [AlphaFold 3 paper](https://nature.com/articles/s41586-024-07487-w) for
-    details.
-*   [RNACentral: 21\_0](https://rnacentral.org/) (modified), by The RNAcentral
-    Consortium available free of all copyright restrictions and made fully and
-    freely available for both non-commercial and commercial use under
-    [CC0 1.0 Universal (CC0 1.0) Public Domain Dedication](https://creativecommons.org/publicdomain/zero/1.0/).
-    See the Supplementary Information of the
-    [AlphaFold 3 paper](https://nature.com/articles/s41586-024-07487-w) for
-    details.
+* [BFD](https://bfd.mmseqs.com/) (modified), by Steinegger M. and Söding J.,
+  modified by Google DeepMind, available under a
+  [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/deed.en).
+  See the Methods section of the
+  [AlphaFold proteome paper](https://www.nature.com/articles/s41586-021-03828-1)
+  for details.
+* [PDB](https://wwpdb.org) (unmodified), by H.M. Berman et al., available free
+  of all copyright restrictions and made fully and freely available for both
+  non-commercial and commercial use under
+  [CC0 1.0 Universal (CC0 1.0) Public Domain Dedication](https://creativecommons.org/publicdomain/zero/1.0/).
+* [MGnify: v2022\_05](https://ftp.ebi.ac.uk/pub/databases/metagenomics/peptide_database/2022_05/README.txt)
+  (unmodified), by Mitchell AL et al., available free of all copyright
+  restrictions and made fully and freely available for both non-commercial and
+  commercial use under
+  [CC0 1.0 Universal (CC0 1.0) Public Domain Dedication](https://creativecommons.org/publicdomain/zero/1.0/).
+* [UniProt: 2021\_04](https://www.uniprot.org/) (unmodified), by The UniProt
+  Consortium, available under a
+  [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/deed.en).
+* [UniRef90: 2022\_05](https://www.uniprot.org/) (unmodified) by The UniProt
+  Consortium, available under a
+  [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/deed.en).
+* [NT: 2023\_02\_23](https://www.ncbi.nlm.nih.gov/nucleotide/) (modified) See
+  the Supplementary Information of the
+  [AlphaFold 3 paper](https://nature.com/articles/s41586-024-07487-w) for
+  details.
+* [RFam: 14\_4](https://rfam.org/) (modified), by I. Kalvari et al., available
+  free of all copyright restrictions and made fully and freely available for
+  both non-commercial and commercial use under
+  [CC0 1.0 Universal (CC0 1.0) Public Domain Dedication](https://creativecommons.org/publicdomain/zero/1.0/).
+  See the Supplementary Information of the
+  [AlphaFold 3 paper](https://nature.com/articles/s41586-024-07487-w) for
+  details.
+* [RNACentral: 21\_0](https://rnacentral.org/) (modified), by The RNAcentral
+  Consortium available free of all copyright restrictions and made fully and
+  freely available for both non-commercial and commercial use under
+  [CC0 1.0 Universal (CC0 1.0) Public Domain Dedication](https://creativecommons.org/publicdomain/zero/1.0/).
+  See the Supplementary Information of the
+  [AlphaFold 3 paper](https://nature.com/articles/s41586-024-07487-w) for
+  details.
