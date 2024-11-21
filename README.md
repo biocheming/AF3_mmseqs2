@@ -1,6 +1,6 @@
 ![header](docs/header.jpg)
 
-# AlphaFold 3
+# AlphaFold 3 with MMSeqs2-GPU
 
 This package provides an implementation of the inference pipeline of AlphaFold
 3. See below for how to access the model parameters. You may only use AlphaFold
