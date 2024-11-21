@@ -56,7 +56,7 @@ from jax.lib import xla_bridge
 xla_bridge.get_backend().platform
 
 # using SSD for seqs storage
-# download data about 252GB (630GB when decompresed)
+# download data about 252GB (630GB after decompresed)
 python fetch_databases.py --download_destination=<your_database_path>
 
 
