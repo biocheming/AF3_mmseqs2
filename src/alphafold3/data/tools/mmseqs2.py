@@ -175,7 +175,19 @@ class MMseqs2(msa_tool.MsaTool):
             with tempfile.TemporaryDirectory() as tmp_dir:
                 # 根据数据库大小动态计算分块数
                 db_size_gb = os.path.getsize(self._ensure_database_indexed()) / (1024**3)
-                n_splits = max(20, int(db_size_gb / 2.5))  # 每2.5GB数据一个分块，最少20个分块
+                
+                # 大型数据库（>20GB）: 每2.5GB一个分块
+                # 小型数据库（≤20GB）: 固定20个分块
+                if db_size_gb > 20:
+                    n_splits = int(db_size_gb / 2.5)
+                    memory_per_split = "2G"
+                else:
+                    n_splits = 20
+                    # 小数据库每个分块使用更少内存
+                    memory_per_split = "1G"
+                
+                logging.info(f"Database size: {db_size_gb:.1f}GB")
+                logging.info(f"Creating index with {n_splits} splits, {memory_per_split} per split")
                 
                 index_cmd = [
                     self.binary_path,
@@ -186,7 +198,7 @@ class MMseqs2(msa_tool.MsaTool):
                     "--threads", str(self.n_cpu),
                     "--comp-bias-corr", "0",
                     "--split", str(n_splits),
-                    "--split-memory-limit", "2G"  # 每个split 2GB
+                    "--split-memory-limit", memory_per_split
                 ]
                 
                 try:

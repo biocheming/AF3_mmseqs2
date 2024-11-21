@@ -109,6 +109,12 @@ control which parts AlphaFold 3 will run are:
 
 See the [input documentation](docs/input.md).
 
+Togenerate an input json file using the script:
+
+```bash
+python scripts/generate_input.py
+```
+
 ## AlphaFold 3 Output
 
 See the [output documentation](docs/output.md).
