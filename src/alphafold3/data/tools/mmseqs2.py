@@ -173,7 +173,10 @@ class MMseqs2(msa_tool.MsaTool):
             logging.info(f"Creating GPU-optimized index in {gpu_index_dir}")
             
             with tempfile.TemporaryDirectory() as tmp_dir:
-                # 为4090显卡（24GB）优化的参数
+                # 根据数据库大小动态计算分块数
+                db_size_gb = os.path.getsize(self._ensure_database_indexed()) / (1024**3)
+                n_splits = max(20, int(db_size_gb / 2.5))  # 每2.5GB数据一个分块，最少20个分块
+                
                 index_cmd = [
                     self.binary_path,
                     "createindex",
@@ -182,8 +185,8 @@ class MMseqs2(msa_tool.MsaTool):
                     "--remove-tmp-files", "1",
                     "--threads", str(self.n_cpu),
                     "--comp-bias-corr", "0",
-                    "--split", "6",        # 6个split
-                    "--split-memory-limit", "3.5G"  # 每个split 3.5GB
+                    "--split", str(n_splits),
+                    "--split-memory-limit", "2G"  # 每个split 2GB
                 ]
                 
                 try:
@@ -236,7 +239,6 @@ class MMseqs2(msa_tool.MsaTool):
                 
                 success = False
                 try:
-                    # 第一次尝试：使用6个split
                     gpu_cmd = [
                         self.binary_path,
                         'easy-search',
@@ -249,9 +251,6 @@ class MMseqs2(msa_tool.MsaTool):
                         '-e', str(self.e_value),
                         '--gpu', '1',
                         '--gpu-device', ','.join(map(str, self.gpu_devices)),
-                        '--split', '6',
-                        '--split-memory-limit', '3.5G',
-                        '--comp-bias-corr', '0',
                         '--max-rejected', '5000',
                         '--max-seqs', str(self.max_sequences),
                         '-s', str(self.sensitivity),
@@ -259,16 +258,13 @@ class MMseqs2(msa_tool.MsaTool):
                         '--db-load-mode', '2'
                     ]
                     logging.info(f"Running GPU search with database: {gpu_db}")
-                    logging.info(f"GPU memory configuration: {6 * 3.5:.1f}GB total (6 splits × 3.5GB)")
-                    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(map(str, self.gpu_devices))
                     run_with_logging(gpu_cmd)
                     success = True
                 except subprocess.CalledProcessError as e:
-                    logging.warning("First GPU search attempt failed: %s", e)
+                    logging.warning("GPU search failed: %s", e)
                 
                 if not success:
                     try:
-                        # 第二次尝试：使用更激进的内存设置
                         gpu_cmd = [
                             self.binary_path,
                             'easy-search',
@@ -281,9 +277,6 @@ class MMseqs2(msa_tool.MsaTool):
                             '-e', str(self.e_value),
                             '--gpu', '1',
                             '--gpu-device', ','.join(map(str, self.gpu_devices)),
-                            '--split', '1',
-                            '--split-memory-limit', '15G',
-                            '--comp-bias-corr', '0',
                             '--max-rejected', '3000',
                             '--max-seqs', '3000',
                             '-s', str(self.sensitivity),

@@ -38,43 +38,35 @@ directly from Google. Use is subject to these
 See the [installation documentation](docs/installation.md).
 
 ```
-# nano CMakeLists.txt # 用文本编辑器打开源代码下的CMakelists.txt
-# 在里面18行添加 `set(CMAKE_CXX_FLAGS -lz)`,保存并关闭
-conda create -n af3 python=3.11 # af3在python3.11上通过测试
-conda activate af3 # 激活af3环境
-conda install -c bioconda hmmer # 安装hmmer
+# nano CMakeLists.txt # open CMakelists.txt
+# on the line 18, add `set(CMAKE_CXX_FLAGS -lz)`, save and close 
+conda create -n af3 python=3.11 # create af3 env with conda 
+conda activate af3 # activate af3 env
+conda install -c bioconda hmmer # install hmmer
 pip install -r dev-requirements.txt 
-pip install . --no-deps # --verbose 可选,如果安装出错,使用verbose选项查看具体错误
-build_data # 构建cif数据库
-python run_alphafold_test.py # 由于暂时没有模型参数,仅序列搜索测试成功
+pip install . --no-deps 
+build_data # build cif database
+python run_alphafold_test.py # test 
 
-# jax库GPU检测测试
+# jax GPU test
 python
 import jax
 jax.devices()
-# 返回结果中包含cuda表明jax正确检测到了GPU设置
 from jax.lib import xla_bridge
 xla_bridge.get_backend().platform
-# 返回结果中包含gpu表明jaxlib正确检测到了GPU设置
-# CTRL+D退出
 
-# 基因(序列)数据库下载,极其耗时,推荐使用SSD存储,加快下载和序列搜索的速度
-# 压缩包大小252GB,解压后为630GB
-python fetch_databases.py --download_destination=存放数据库的路径
-sudo chmod 755 --recursive 存放数据库的路径 # 给MSA工具提供权限
+# using SSD for seqs storage
+# download data about 252GB (630GB when decompresed)
+python fetch_databases.py --download_destination=<your_database_path>
+
+
+# bash environment settings (~/.bashrc)
+export XLA_FLAGS="--xla_gpu_enable_triton_gemm=false" 
+export XLA_PYTHON_CLIENT_PREALLOCATE=true
+export XLA_CLIENT_MEM_FRACTION=0.95
 ```
 
-### 环境变量设置
-
-> > 终端环境变量配置: 使用任意文本编辑器,打开`~/.bashrc`,添加下面内容并保存
-> 
-> ```
-> export XLA_FLAGS="--xla_gpu_enable_triton_gemm=false" 
-> export XLA_PYTHON_CLIENT_PREALLOCATE=true
-> export XLA_CLIENT_MEM_FRACTION=0.95
-> ```
-
-**MMSeqs2-GPU installation** see: [mmseqs2_user_guide](MMseqs2_user_guide.md)
+**MMSeqs2-GPU installation** see:[ MMseqs2_user_guide.md](MMseqs2_user_guide.md)
 
 Once you have installed AlphaFold 3, you can test your setup using e.g. the
 
