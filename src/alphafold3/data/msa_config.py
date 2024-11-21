@@ -82,6 +82,20 @@ class NhmmerConfig:
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True, slots=True)
+class MMseqs2Config:
+  """Configuration for MMseqs2."""
+
+  binary_path: str
+  database_path: str
+  n_cpu: int = 8
+  use_gpu: bool = False
+  gpu_server_port: int = 8900
+  e_value: float = 1e-4
+  max_sequences: int = 10_000
+  sensitivity: float = 7.5
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True, slots=True)
 class RunConfig:
   """Configuration for an MSA run.
 
@@ -93,7 +107,7 @@ class RunConfig:
       doesn't make sense to set this to less than 2.
   """
 
-  config: JackhmmerConfig | NhmmerConfig
+  config: JackhmmerConfig | NhmmerConfig | MMseqs2Config
   chain_poly_type: str
   crop_size: int | None
 

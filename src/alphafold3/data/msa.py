@@ -22,6 +22,7 @@ from alphafold3.data import parsers
 from alphafold3.data.tools import jackhmmer
 from alphafold3.data.tools import msa_tool
 from alphafold3.data.tools import nhmmer
+from alphafold3.data.tools import mmseqs2
 import numpy as np
 
 
@@ -285,10 +286,9 @@ class Msa:
 
 
 def get_msa_tool(
-    msa_tool_config: msa_config.JackhmmerConfig | msa_config.NhmmerConfig,
+    msa_tool_config: msa_config.JackhmmerConfig | msa_config.NhmmerConfig | msa_config.MMseqs2Config,
 ) -> msa_tool.MsaTool:
   """Returns the requested MSA tool."""
-
   match msa_tool_config:
     case msa_config.JackhmmerConfig():
       return jackhmmer.Jackhmmer(
@@ -299,6 +299,9 @@ def get_msa_tool(
           e_value=msa_tool_config.e_value,
           z_value=msa_tool_config.z_value,
           max_sequences=msa_tool_config.max_sequences,
+          filter_f1=msa_tool_config.filter_f1,
+          filter_f2=msa_tool_config.filter_f2,
+          filter_f3=msa_tool_config.filter_f3,
       )
     case msa_config.NhmmerConfig():
       return nhmmer.Nhmmer(
@@ -311,8 +314,18 @@ def get_msa_tool(
           max_sequences=msa_tool_config.max_sequences,
           alphabet=msa_tool_config.alphabet,
       )
+    case msa_config.MMseqs2Config():
+      return mmseqs2.MMseqs2(
+          binary_path=msa_tool_config.binary_path,
+          database_path=msa_tool_config.database_path,
+          n_cpu=msa_tool_config.n_cpu,
+          use_gpu=msa_tool_config.use_gpu,
+          e_value=msa_tool_config.e_value,
+          max_sequences=msa_tool_config.max_sequences,
+          sensitivity=msa_tool_config.sensitivity,
+      )
     case _:
-      raise ValueError(f'Unknown MSA tool: {msa_tool_config}.')
+      raise ValueError(f'Unknown MSA tool config type: {type(msa_tool_config)}')
 
 
 def get_msa(

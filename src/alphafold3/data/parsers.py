@@ -11,6 +11,7 @@
 """Functions for parsing various file formats."""
 
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import IO, TypeAlias
 
 from alphafold3.cpp import fasta_iterator
@@ -18,6 +19,18 @@ from alphafold3.cpp import msa_conversion
 
 
 DeletionMatrix: TypeAlias = Sequence[Sequence[int]]
+
+
+@dataclass
+class Database:
+    """Configuration for a sequence database.
+
+    Attributes:
+        name: Name of the database.
+        path: Path to the database file.
+    """
+    name: str
+    path: str
 
 
 def lazy_parse_fasta_string(fasta_string: str) -> Iterable[tuple[str, str]]:

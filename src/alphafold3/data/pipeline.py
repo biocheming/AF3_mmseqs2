@@ -23,6 +23,7 @@ from alphafold3.data import msa
 from alphafold3.data import msa_config
 from alphafold3.data import structure_stores
 from alphafold3.data import templates
+from alphafold3.data.tools import mmseqs2
 
 
 # Cache to avoid re-running the MSA tools for the same sequence in homomers.
@@ -178,58 +179,49 @@ def _get_rna_msa(
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class DataPipelineConfig:
-  """The configuration for the data pipeline.
+  """Configuration for the data pipeline.
 
   Attributes:
-    jackhmmer_binary_path: Jackhmmer binary path, used for protein MSA search.
-    nhmmer_binary_path: Nhmmer binary path, used for RNA MSA search.
-    hmmalign_binary_path: Hmmalign binary path, used to align hits to the query
-      profile.
-    hmmsearch_binary_path: Hmmsearch binary path, used for template search.
-    hmmbuild_binary_path: Hmmbuild binary path, used to build HMM profile from
-      raw MSA in template search.
-    small_bfd_database_path: Small BFD database path, used for protein MSA
-      search.
-    mgnify_database_path: Mgnify database path, used for protein MSA search.
-    uniprot_cluster_annot_database_path: Uniprot database path, used for protein
-      paired MSA search.
-    uniref90_database_path: UniRef90 database path, used for MSA search, and the
-      MSA obtained by searching it is used to construct the profile for template
-      search.
-    ntrna_database_path: NT-RNA database path, used for RNA MSA search.
-    rfam_database_path: Rfam database path, used for RNA MSA search.
-    rna_central_database_path: RNAcentral database path, used for RNA MSA
-      search.
-    seqres_database_path: PDB sequence database path, used for template search.
-    pdb_database_path: PDB database directory with mmCIF files path, used for
-      template search.
-    jackhmmer_n_cpu: Number of CPUs to use for Jackhmmer.
-    nhmmer_n_cpu: Number of CPUs to use for Nhmmer.
+    jackhmmer_binary_path: Path to the jackhmmer binary.
+    nhmmer_binary_path: Path to the nhmmer binary.
+    hmmalign_binary_path: Path to the hmmalign binary.
+    hmmsearch_binary_path: Path to the hmmsearch binary.
+    hmmbuild_binary_path: Path to the hmmbuild binary.
+    mmseqs2_binary_path: Path to the MMseqs2 binary.
+    small_bfd_database_path: Path to the small BFD database.
+    mgnify_database_path: Path to the MGnify database.
+    uniprot_cluster_annot_database_path: Path to the UniProt cluster annotation database.
+    uniref90_database_path: Path to the UniRef90 database.
+    ntrna_database_path: Path to the NTRNA database.
+    rfam_database_path: Path to the Rfam database.
+    rna_central_database_path: Path to the RNAcentral database.
+    seqres_database_path: Path to the PDB seqres database.
+    pdb_database_path: Path to the PDB database.
+    jackhmmer_n_cpu: Number of CPUs to use for jackhmmer.
+    nhmmer_n_cpu: Number of CPUs to use for nhmmer.
+    mmseqs2_n_cpu: Number of CPUs to use for MMseqs2.
+    mmseqs2_use_gpu: Whether to use GPU acceleration for MMseqs2 MSA generation.
   """
 
-  # Binary paths.
   jackhmmer_binary_path: str
   nhmmer_binary_path: str
   hmmalign_binary_path: str
   hmmsearch_binary_path: str
   hmmbuild_binary_path: str
-
-  # Jackhmmer databases.
+  mmseqs2_binary_path: str
   small_bfd_database_path: str
   mgnify_database_path: str
   uniprot_cluster_annot_database_path: str
   uniref90_database_path: str
-  # Nhmmer databases.
   ntrna_database_path: str
   rfam_database_path: str
   rna_central_database_path: str
-  # Template search databases.
   seqres_database_path: str
   pdb_database_path: str
-
-  # Optional configuration for MSA tools.
   jackhmmer_n_cpu: int = 8
   nhmmer_n_cpu: int = 8
+  mmseqs2_n_cpu: int = 8
+  mmseqs2_use_gpu: bool = False
 
 
 class DataPipeline:
@@ -238,67 +230,53 @@ class DataPipeline:
   def __init__(self, data_pipeline_config: DataPipelineConfig):
     """Initializes the data pipeline with default configurations."""
     self._uniref90_msa_config = msa_config.RunConfig(
-        config=msa_config.JackhmmerConfig(
-            binary_path=data_pipeline_config.jackhmmer_binary_path,
-            database_config=msa_config.DatabaseConfig(
-                name='uniref90',
-                path=data_pipeline_config.uniref90_database_path,
-            ),
-            n_cpu=data_pipeline_config.jackhmmer_n_cpu,
-            n_iter=1,
+        config=msa_config.MMseqs2Config(
+            binary_path=data_pipeline_config.mmseqs2_binary_path,
+            database_path=data_pipeline_config.uniref90_database_path,
+            n_cpu=data_pipeline_config.mmseqs2_n_cpu,
+            use_gpu=data_pipeline_config.mmseqs2_use_gpu,
             e_value=1e-4,
-            z_value=None,
             max_sequences=10_000,
+            sensitivity=7.5,
         ),
         chain_poly_type=mmcif_names.PROTEIN_CHAIN,
         crop_size=None,
     )
     self._mgnify_msa_config = msa_config.RunConfig(
-        config=msa_config.JackhmmerConfig(
-            binary_path=data_pipeline_config.jackhmmer_binary_path,
-            database_config=msa_config.DatabaseConfig(
-                name='mgnify',
-                path=data_pipeline_config.mgnify_database_path,
-            ),
-            n_cpu=data_pipeline_config.jackhmmer_n_cpu,
-            n_iter=1,
+        config=msa_config.MMseqs2Config(
+            binary_path=data_pipeline_config.mmseqs2_binary_path,
+            database_path=data_pipeline_config.mgnify_database_path,
+            n_cpu=data_pipeline_config.mmseqs2_n_cpu,
+            use_gpu=data_pipeline_config.mmseqs2_use_gpu,
             e_value=1e-4,
-            z_value=None,
             max_sequences=5_000,
+            sensitivity=7.5,
         ),
         chain_poly_type=mmcif_names.PROTEIN_CHAIN,
         crop_size=None,
     )
     self._small_bfd_msa_config = msa_config.RunConfig(
-        config=msa_config.JackhmmerConfig(
-            binary_path=data_pipeline_config.jackhmmer_binary_path,
-            database_config=msa_config.DatabaseConfig(
-                name='small_bfd',
-                path=data_pipeline_config.small_bfd_database_path,
-            ),
-            n_cpu=data_pipeline_config.jackhmmer_n_cpu,
-            n_iter=1,
+        config=msa_config.MMseqs2Config(
+            binary_path=data_pipeline_config.mmseqs2_binary_path,
+            database_path=data_pipeline_config.small_bfd_database_path,
+            n_cpu=data_pipeline_config.mmseqs2_n_cpu,
+            use_gpu=data_pipeline_config.mmseqs2_use_gpu,
             e_value=1e-4,
-            # Set z_value=138_515_945 to match the z_value used in the paper.
-            # In practice, this has minimal impact on predicted structures.
-            z_value=None,
             max_sequences=5_000,
+            sensitivity=7.5,
         ),
         chain_poly_type=mmcif_names.PROTEIN_CHAIN,
         crop_size=None,
     )
     self._uniprot_msa_config = msa_config.RunConfig(
-        config=msa_config.JackhmmerConfig(
-            binary_path=data_pipeline_config.jackhmmer_binary_path,
-            database_config=msa_config.DatabaseConfig(
-                name='uniprot_cluster_annot',
-                path=data_pipeline_config.uniprot_cluster_annot_database_path,
-            ),
-            n_cpu=data_pipeline_config.jackhmmer_n_cpu,
-            n_iter=1,
+        config=msa_config.MMseqs2Config(
+            binary_path=data_pipeline_config.mmseqs2_binary_path,
+            database_path=data_pipeline_config.uniprot_cluster_annot_database_path,
+            n_cpu=data_pipeline_config.mmseqs2_n_cpu,
+            use_gpu=data_pipeline_config.mmseqs2_use_gpu,
             e_value=1e-4,
-            z_value=None,
             max_sequences=50_000,
+            sensitivity=7.5,
         ),
         chain_poly_type=mmcif_names.PROTEIN_CHAIN,
         crop_size=None,

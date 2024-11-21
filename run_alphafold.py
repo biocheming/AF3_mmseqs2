@@ -1,3 +1,4 @@
+#!/bin/env python3
 # Copyright 2024 DeepMind Technologies Limited
 #
 # AlphaFold 3 source code is licensed under CC BY-NC-SA 4.0. To view a copy of
@@ -56,8 +57,9 @@ import numpy as np
 
 
 _HOME_DIR = pathlib.Path(os.environ.get('HOME'))
-DEFAULT_MODEL_DIR = _HOME_DIR / 'models'
-DEFAULT_DB_DIR = _HOME_DIR / 'public_databases'
+DEFAULT_MODEL_DIR = pathlib.Path('/opt/data3/alphafold2401_data/af3_params')
+DEFAULT_DB_DIR = pathlib.Path('/opt/data2/af3_db')
+
 
 
 # Input and output paths.
@@ -135,6 +137,17 @@ _HMMBUILD_BINARY_PATH = flags.DEFINE_string(
     shutil.which('hmmbuild'),
     'Path to the Hmmbuild binary.',
 )
+_MMSEQS2_BINARY_PATH = flags.DEFINE_string(
+    'mmseqs2_binary_path',
+    'mmseqs',
+    'MMseqs2 binary path, used for protein MSA search.',
+)
+
+_MMSEQS2_USE_GPU = flags.DEFINE_boolean(
+    'mmseqs2_use_gpu',
+    False,
+    'Whether to use GPU acceleration for MMseqs2 MSA generation.',
+)
 
 # Database paths.
 _DB_DIR = flags.DEFINE_multi_string(
@@ -203,6 +216,11 @@ _NHMMER_N_CPU = flags.DEFINE_integer(
     min(multiprocessing.cpu_count(), 8),
     'Number of CPUs to use for Nhmmer. Default to min(cpu_count, 8). Going'
     ' beyond 8 CPUs provides very little additional speedup.',
+)
+_MMSEQS2_N_CPU = flags.DEFINE_integer(
+    'mmseqs2_n_cpu',
+    8,
+    'Number of CPUs to use for MMseqs2.',
 )
 
 # Compilation cache.
@@ -642,25 +660,37 @@ def main(_):
         hmmalign_binary_path=_HMMALIGN_BINARY_PATH.value,
         hmmsearch_binary_path=_HMMSEARCH_BINARY_PATH.value,
         hmmbuild_binary_path=_HMMBUILD_BINARY_PATH.value,
+        mmseqs2_binary_path=_MMSEQS2_BINARY_PATH.value,
         small_bfd_database_path=expand_path(_SMALL_BFD_DATABASE_PATH.value),
         mgnify_database_path=expand_path(_MGNIFY_DATABASE_PATH.value),
         uniprot_cluster_annot_database_path=expand_path(
-            _UNIPROT_CLUSTER_ANNOT_DATABASE_PATH.value
-        ),
+            _UNIPROT_CLUSTER_ANNOT_DATABASE_PATH.value),
         uniref90_database_path=expand_path(_UNIREF90_DATABASE_PATH.value),
         ntrna_database_path=expand_path(_NTRNA_DATABASE_PATH.value),
         rfam_database_path=expand_path(_RFAM_DATABASE_PATH.value),
         rna_central_database_path=expand_path(_RNA_CENTRAL_DATABASE_PATH.value),
-        pdb_database_path=expand_path(_PDB_DATABASE_PATH.value),
         seqres_database_path=expand_path(_SEQRES_DATABASE_PATH.value),
+        pdb_database_path=expand_path(_PDB_DATABASE_PATH.value),
         jackhmmer_n_cpu=_JACKHMMER_N_CPU.value,
         nhmmer_n_cpu=_NHMMER_N_CPU.value,
+        mmseqs2_n_cpu=_MMSEQS2_N_CPU.value,
+        mmseqs2_use_gpu=_MMSEQS2_USE_GPU.value,
     )
   else:
     print('Skipping running the data pipeline.')
     data_pipeline_config = None
 
   if _RUN_INFERENCE.value:
+    # Fail early on incompatible devices, but only if we're running inference.
+    gpu_devices = jax.local_devices(backend='gpu')
+    if gpu_devices and float(gpu_devices[0].compute_capability) < 8.0:
+      raise ValueError(
+          'There are currently known unresolved numerical issues with using'
+          ' devices with compute capability less than 8.0. See '
+          ' https://github.com/google-deepmind/alphafold3/issues/59 for'
+          ' tracking.'
+      )
+
     devices = jax.local_devices(backend='gpu')
     print(f'Found local devices: {devices}')
 
