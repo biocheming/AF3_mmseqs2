@@ -36,98 +36,87 @@ def _get_protein_msa_and_templates(
     uniprot_msa_config: msa_config.RunConfig,
     templates_config: msa_config.TemplatesConfig,
     pdb_database_path: str,
-) -> tuple[msa.Msa, msa.Msa, templates.Templates]:
-  """Processes a single protein chain."""
-  logging.info('Getting protein MSAs for sequence %s', sequence)
-  msa_start_time = time.time()
-  # Run various MSA tools in parallel. Use a ThreadPoolExecutor because
-  # they're not blocked by the GIL, as they're sub-shelled out.
-  with futures.ThreadPoolExecutor(max_workers=4) as executor:
+) -> tuple[msa.Msa, msa.Msa, list[templates.Hit]]:
+  """Gets the MSA and templates for a protein sequence."""
+  # We first run the MSA tools in parallel.
+  with futures.ThreadPoolExecutor() as executor:
     uniref90_msa_future = executor.submit(
-        msa.get_msa,
-        target_sequence=sequence,
-        run_config=uniref90_msa_config,
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+        msa.get_msa, sequence, uniref90_msa_config
     )
     mgnify_msa_future = executor.submit(
-        msa.get_msa,
-        target_sequence=sequence,
-        run_config=mgnify_msa_config,
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+        msa.get_msa, sequence, mgnify_msa_config
     )
     small_bfd_msa_future = executor.submit(
-        msa.get_msa,
-        target_sequence=sequence,
-        run_config=small_bfd_msa_config,
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+        msa.get_msa, sequence, small_bfd_msa_config
     )
     uniprot_msa_future = executor.submit(
-        msa.get_msa,
-        target_sequence=sequence,
-        run_config=uniprot_msa_config,
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+        msa.get_msa, sequence, uniprot_msa_config
     )
+
+  # Get MSA results first since we need uniref90_msa for template search
   uniref90_msa = uniref90_msa_future.result()
   mgnify_msa = mgnify_msa_future.result()
   small_bfd_msa = small_bfd_msa_future.result()
   uniprot_msa = uniprot_msa_future.result()
-  logging.info(
-      'Getting protein MSAs took %.2f seconds for sequence %s',
-      time.time() - msa_start_time,
-      sequence,
+
+  # Now run template search using the uniref90 MSA
+  # If uniref90_msa is empty, create a minimal MSA with just the query sequence
+  if not uniref90_msa.sequences:
+    logging.warning('UniRef90 MSA is empty, using query sequence only for template search')
+    template_search_msa = msa.Msa(
+        sequences=[sequence],
+        deletion_matrix=[[0] * len(sequence)],
+        descriptions=['query'],
+    )
+  else:
+    template_search_msa = uniref90_msa
+
+  templates_obj = templates.Templates.from_seq_and_a3m(
+      query_sequence=sequence,
+      msa_a3m=template_search_msa.to_a3m(),
+      max_template_date=templates_config.filter_config.max_template_date,
+      database_path=templates_config.template_tool_config.database_path,
+      hmmsearch_config=templates_config.template_tool_config.hmmsearch_config,
+      max_a3m_query_sequences=None,  # Use all sequences
+      structure_store=structure_stores.StructureStore(pdb_database_path),
   )
 
-  logging.info(
-      'Deduplicating MSAs and getting protein templates for sequence %s',
-      sequence,
-  )
-  templates_start_time = time.time()
-  with futures.ThreadPoolExecutor() as executor:
-    unpaired_protein_msa_future = executor.submit(
-        msa.Msa.from_multiple_msas,
-        msas=[uniref90_msa, small_bfd_msa, mgnify_msa],
-        deduplicate=True,
-    )
-    paired_protein_msa_future = executor.submit(
-        msa.Msa.from_multiple_msas, msas=[uniprot_msa], deduplicate=False
-    )
-    filter_config = templates_config.filter_config
-    templates_future = executor.submit(
-        templates.Templates.from_seq_and_a3m,
-        query_sequence=sequence,
-        msa_a3m=uniref90_msa.to_a3m(),
-        max_template_date=filter_config.max_template_date,
-        database_path=templates_config.template_tool_config.database_path,
-        hmmsearch_config=templates_config.template_tool_config.hmmsearch_config,
-        max_a3m_query_sequences=None,
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-        structure_store=structure_stores.StructureStore(pdb_database_path),
-    )
-  unpaired_protein_msa = unpaired_protein_msa_future.result()
-  paired_protein_msa = paired_protein_msa_future.result()
-  protein_templates = templates_future.result()
-  logging.info(
-      'Deduplicating MSAs and getting protein templates took %.2f seconds for'
-      ' sequence %s',
-      time.time() - templates_start_time,
-      sequence,
+  # Filter templates according to the config
+  templates_obj = templates_obj.filter(
+      max_subsequence_ratio=templates_config.filter_config.max_subsequence_ratio,
+      min_align_ratio=templates_config.filter_config.min_align_ratio,
+      min_hit_length=templates_config.filter_config.min_hit_length,
+      deduplicate_sequences=templates_config.filter_config.deduplicate_sequences,
+      max_hits=templates_config.filter_config.max_hits,
   )
 
-  logging.info('Filtering protein templates for sequence %s', sequence)
-  filter_start_time = time.time()
-  filtered_templates = protein_templates.filter(
-      max_subsequence_ratio=filter_config.max_subsequence_ratio,
-      min_align_ratio=filter_config.min_align_ratio,
-      min_hit_length=filter_config.min_hit_length,
-      deduplicate_sequences=filter_config.deduplicate_sequences,
-      max_hits=filter_config.max_hits,
+  # Get both hits and their structures
+  template_hits = templates_obj.get_hits_with_structures()
+
+  # Then we merge the MSAs.
+  unpaired_msa = msa.merge_msas(
+      msas=[uniref90_msa, mgnify_msa, small_bfd_msa, uniprot_msa],
+      deduplicate=True,
   )
-  logging.info(
-      'Filtering protein templates took %.2f seconds for sequence %s',
-      time.time() - filter_start_time,
-      sequence,
-  )
-  return unpaired_protein_msa, paired_protein_msa, filtered_templates
+
+  # If the merged MSA is empty, create a minimal MSA with just the query sequence
+  if not unpaired_msa.sequences:
+    logging.warning('All MSAs are empty, using query sequence only')
+    unpaired_msa = msa.Msa(
+        sequences=[sequence],
+        deletion_matrix=[[0] * len(sequence)],
+        descriptions=['query'],
+    )
+  # If the query sequence is not the first sequence, add it
+  elif unpaired_msa.sequences[0] != sequence:
+    logging.warning('Query sequence not found in MSA, adding it as first sequence')
+    unpaired_msa = msa.Msa(
+        sequences=[sequence] + unpaired_msa.sequences,
+        deletion_matrix=[[0] * len(sequence)] + unpaired_msa.deletion_matrix,
+        descriptions=['query'] + unpaired_msa.descriptions,
+    )
+
+  return unpaired_msa, None, template_hits
 
 
 # Cache to avoid re-running the Nhmmer for the same sequence in homomers.
@@ -177,7 +166,7 @@ def _get_rna_msa(
   )
 
 
-@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+@dataclasses.dataclass(frozen=True, kw_only=True, slots=True)
 class DataPipelineConfig:
   """Configuration for the data pipeline.
 
@@ -200,7 +189,8 @@ class DataPipelineConfig:
     jackhmmer_n_cpu: Number of CPUs to use for jackhmmer.
     nhmmer_n_cpu: Number of CPUs to use for nhmmer.
     mmseqs2_n_cpu: Number of CPUs to use for MMseqs2.
-    mmseqs2_use_gpu: Whether to use GPU acceleration for MMseqs2 MSA generation.
+    msa_tool: Tool to use for MSA generation (mmseqs2 or jackhmmer).
+    mmseqs2_gpu_devices: List of GPU devices to use for MMseqs2 searches.
   """
 
   jackhmmer_binary_path: str
@@ -221,65 +211,29 @@ class DataPipelineConfig:
   jackhmmer_n_cpu: int = 8
   nhmmer_n_cpu: int = 8
   mmseqs2_n_cpu: int = 8
-  mmseqs2_use_gpu: bool = False
-
+  msa_tool: str = "mmseqs2"
+  mmseqs2_gpu_devices: tuple[str, ...] | None = None
 
 class DataPipeline:
   """Runs the alignment tools and assembles the input features."""
 
   def __init__(self, data_pipeline_config: DataPipelineConfig):
     """Initializes the data pipeline with default configurations."""
-    self._uniref90_msa_config = msa_config.RunConfig(
-        config=msa_config.MMseqs2Config(
-            binary_path=data_pipeline_config.mmseqs2_binary_path,
-            database_path=data_pipeline_config.uniref90_database_path,
-            n_cpu=data_pipeline_config.mmseqs2_n_cpu,
-            use_gpu=data_pipeline_config.mmseqs2_use_gpu,
-            e_value=1e-4,
-            max_sequences=10_000,
-            sensitivity=7.5,
-        ),
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-        crop_size=None,
+    self._uniref90_msa_config = msa.get_protein_msa_config(
+        data_pipeline_config,
+        data_pipeline_config.uniref90_database_path,
     )
-    self._mgnify_msa_config = msa_config.RunConfig(
-        config=msa_config.MMseqs2Config(
-            binary_path=data_pipeline_config.mmseqs2_binary_path,
-            database_path=data_pipeline_config.mgnify_database_path,
-            n_cpu=data_pipeline_config.mmseqs2_n_cpu,
-            use_gpu=data_pipeline_config.mmseqs2_use_gpu,
-            e_value=1e-4,
-            max_sequences=5_000,
-            sensitivity=7.5,
-        ),
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-        crop_size=None,
+    self._mgnify_msa_config = msa.get_protein_msa_config(
+        data_pipeline_config,
+        data_pipeline_config.mgnify_database_path,
     )
-    self._small_bfd_msa_config = msa_config.RunConfig(
-        config=msa_config.MMseqs2Config(
-            binary_path=data_pipeline_config.mmseqs2_binary_path,
-            database_path=data_pipeline_config.small_bfd_database_path,
-            n_cpu=data_pipeline_config.mmseqs2_n_cpu,
-            use_gpu=data_pipeline_config.mmseqs2_use_gpu,
-            e_value=1e-4,
-            max_sequences=5_000,
-            sensitivity=7.5,
-        ),
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-        crop_size=None,
+    self._small_bfd_msa_config = msa.get_protein_msa_config(
+        data_pipeline_config,
+        data_pipeline_config.small_bfd_database_path,
     )
-    self._uniprot_msa_config = msa_config.RunConfig(
-        config=msa_config.MMseqs2Config(
-            binary_path=data_pipeline_config.mmseqs2_binary_path,
-            database_path=data_pipeline_config.uniprot_cluster_annot_database_path,
-            n_cpu=data_pipeline_config.mmseqs2_n_cpu,
-            use_gpu=data_pipeline_config.mmseqs2_use_gpu,
-            e_value=1e-4,
-            max_sequences=50_000,
-            sensitivity=7.5,
-        ),
-        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-        crop_size=None,
+    self._uniprot_msa_config = msa.get_protein_msa_config(
+        data_pipeline_config,
+        data_pipeline_config.uniprot_cluster_annot_database_path,
     )
     self._nt_rna_msa_config = msa_config.RunConfig(
         config=msa_config.NhmmerConfig(
@@ -293,7 +247,7 @@ class DataPipeline:
             n_cpu=data_pipeline_config.nhmmer_n_cpu,
             e_value=1e-3,
             alphabet='rna',
-            max_sequences=10_000,
+            max_sequences=10000,
         ),
         chain_poly_type=mmcif_names.RNA_CHAIN,
         crop_size=None,
@@ -310,7 +264,7 @@ class DataPipeline:
             n_cpu=data_pipeline_config.nhmmer_n_cpu,
             e_value=1e-3,
             alphabet='rna',
-            max_sequences=10_000,
+            max_sequences=10000,
         ),
         chain_poly_type=mmcif_names.RNA_CHAIN,
         crop_size=None,
@@ -327,7 +281,7 @@ class DataPipeline:
             n_cpu=data_pipeline_config.nhmmer_n_cpu,
             e_value=1e-3,
             alphabet='rna',
-            max_sequences=10_000,
+            max_sequences=10000,
         ),
         chain_poly_type=mmcif_names.RNA_CHAIN,
         crop_size=None,
@@ -386,7 +340,7 @@ class DataPipeline:
       )
       return chain
 
-    unpaired_msa, paired_msa, template_hits = _get_protein_msa_and_templates(
+    unpaired_msa, _, template_hits = _get_protein_msa_and_templates(
         sequence=chain.sequence,
         uniref90_msa_config=self._uniref90_msa_config,
         mgnify_msa_config=self._mgnify_msa_config,
@@ -399,13 +353,13 @@ class DataPipeline:
     return dataclasses.replace(
         chain,
         unpaired_msa=unpaired_msa.to_a3m(),
-        paired_msa=paired_msa.to_a3m(),
+        paired_msa="",
         templates=[
             folding_input.Template(
                 mmcif=struc.to_mmcif(),
                 query_to_template_map=hit.query_to_hit_mapping,
             )
-            for hit, struc in template_hits.get_hits_with_structures()
+            for hit, struc in template_hits
         ],
     )
 

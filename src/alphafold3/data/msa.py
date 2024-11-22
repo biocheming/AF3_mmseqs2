@@ -11,190 +11,27 @@
 """Functions for getting MSA and calculating alignment features."""
 
 from collections.abc import MutableMapping, Sequence
+import dataclasses
 import string
-from typing import Self
+from typing import Self, Union, Optional
 
 from absl import logging
 from alphafold3.constants import mmcif_names
 from alphafold3.data import msa_config
 from alphafold3.data import msa_features
-from alphafold3.data import parsers
+from alphafold3.data import msa_identifiers
 from alphafold3.data.tools import jackhmmer
-from alphafold3.data.tools import msa_tool
-from alphafold3.data.tools import nhmmer
 from alphafold3.data.tools import mmseqs2
+from alphafold3.data.tools import nhmmer
 import numpy as np
 
 
-class Error(Exception):
-  """Error indicatating a problem with MSA Search."""
-
-
-def _featurize(seq: str, chain_poly_type: str) -> str | list[int]:
-  if mmcif_names.is_standard_polymer_type(chain_poly_type):
-    featurized_seqs, _ = msa_features.extract_msa_features(
-        msa_sequences=[seq], chain_poly_type=chain_poly_type
-    )
-    return featurized_seqs[0].tolist()
-  # For anything else simply require an identical match.
-  return seq
-
-
-def sequences_are_feature_equivalent(
-    sequence1: str,
-    sequence2: str,
-    chain_poly_type: str,
-) -> bool:
-  feat1 = _featurize(sequence1, chain_poly_type)
-  feat2 = _featurize(sequence2, chain_poly_type)
-  return feat1 == feat2
-
-
+@dataclasses.dataclass(frozen=True, slots=True)
 class Msa:
-  """Multiple Sequence Alignment container with methods for manipulating it."""
-
-  def __init__(
-      self,
-      query_sequence: str,
-      chain_poly_type: str,
-      sequences: Sequence[str],
-      descriptions: Sequence[str],
-      deduplicate: bool = True,
-  ):
-    """Raw constructor, prefer using the from_{a3m,multiple_msas} class methods.
-
-    The first sequence must be equal (in featurised form) to the query sequence.
-    If sequences/descriptions are empty, they will be initialised to the query.
-
-    Args:
-      query_sequence: The sequence that was used to search for MSA.
-      chain_poly_type: Polymer type of the query sequence, see mmcif_names.
-      sequences: The sequences returned by the MSA search tool.
-      descriptions: Metadata for the sequences returned by the MSA search tool.
-      deduplicate: If True, the MSA sequences will be deduplicated in the input
-        order. Lowercase letters (insertions) are ignored when deduplicating.
-    """
-    if len(sequences) != len(descriptions):
-      raise ValueError('The number of sequences and descriptions must match.')
-
-    self.query_sequence = query_sequence
-    self.chain_poly_type = chain_poly_type
-
-    if not deduplicate:
-      self.sequences = sequences
-      self.descriptions = descriptions
-    else:
-      self.sequences = []
-      self.descriptions = []
-      # A replacement table that removes all lowercase characters.
-      deletion_table = str.maketrans('', '', string.ascii_lowercase)
-      unique_sequences = set()
-      for seq, desc in zip(sequences, descriptions, strict=True):
-        # Using string.translate is faster than re.sub('[a-z]+', '').
-        sequence_no_deletions = seq.translate(deletion_table)
-        if sequence_no_deletions not in unique_sequences:
-          unique_sequences.add(sequence_no_deletions)
-          self.sequences.append(seq)
-          self.descriptions.append(desc)
-
-    # Make sure the MSA always has at least the query.
-    self.sequences = self.sequences or [query_sequence]
-    self.descriptions = self.descriptions or ['Original query']
-
-    # Check if the 1st MSA sequence matches the query sequence. Since it may be
-    # mutated by the search tool (jackhmmer) check using the featurized version.
-    if not sequences_are_feature_equivalent(
-        self.sequences[0], query_sequence, chain_poly_type
-    ):
-      raise ValueError(
-          f'First MSA sequence {self.sequences[0]} is not the {query_sequence=}'
-      )
-
-  @classmethod
-  def from_multiple_msas(
-      cls, msas: Sequence[Self], deduplicate: bool = True
-  ) -> Self:
-    """Initializes the MSA from multiple MSAs.
-
-    Args:
-      msas: A sequence of Msa objects representing individual MSAs produced by
-        different tools/dbs.
-      deduplicate: If True, the MSA sequences will be deduplicated in the input
-        order. Lowercase letters (insertions) are ignored when deduplicating.
-
-    Returns:
-      An Msa object created by merging multiple MSAs.
-    """
-    if not msas:
-      raise ValueError('At least one MSA must be provided.')
-
-    query_sequence = msas[0].query_sequence
-    chain_poly_type = msas[0].chain_poly_type
-    sequences = []
-    descriptions = []
-
-    for msa in msas:
-      if msa.query_sequence != query_sequence:
-        raise ValueError(
-            f'Query sequences must match: {[m.query_sequence for m in msas]}'
-        )
-      if msa.chain_poly_type != chain_poly_type:
-        raise ValueError(
-            f'Chain poly types must match: {[m.chain_poly_type for m in msas]}'
-        )
-      sequences.extend(msa.sequences)
-      descriptions.extend(msa.descriptions)
-
-    return cls(
-        query_sequence=query_sequence,
-        chain_poly_type=chain_poly_type,
-        sequences=sequences,
-        descriptions=descriptions,
-        deduplicate=deduplicate,
-    )
-
-  @classmethod
-  def from_multiple_a3ms(
-      cls, a3ms: Sequence[str], chain_poly_type: str, deduplicate: bool = True
-  ) -> Self:
-    """Initializes the MSA from multiple A3M strings.
-
-    Args:
-      a3ms: A sequence of A3M strings representing individual MSAs produced by
-        different tools/dbs.
-      chain_poly_type: Polymer type of the query sequence, see mmcif_names.
-      deduplicate: If True, the MSA sequences will be deduplicated in the input
-        order. Lowercase letters (insertions) are ignored when deduplicating.
-
-    Returns:
-      An Msa object created by merging multiple A3Ms.
-    """
-    if not a3ms:
-      raise ValueError('At least one A3M must be provided.')
-
-    query_sequence = None
-    all_sequences = []
-    all_descriptions = []
-
-    for a3m in a3ms:
-      sequences, descriptions = parsers.parse_fasta(a3m)
-      if query_sequence is None:
-        query_sequence = sequences[0]
-
-      if sequences[0] != query_sequence:
-        raise ValueError(
-            f'Query sequences must match: {sequences[0]=} != {query_sequence=}'
-        )
-      all_sequences.extend(sequences)
-      all_descriptions.extend(descriptions)
-
-    return cls(
-        query_sequence=query_sequence,
-        chain_poly_type=chain_poly_type,
-        sequences=all_sequences,
-        descriptions=all_descriptions,
-        deduplicate=deduplicate,
-    )
+  """Class representing an MSA."""
+  sequences: list[str]
+  deletion_matrix: list[list[int]]
+  descriptions: list[str]
 
   @classmethod
   def from_a3m(
@@ -202,155 +39,188 @@ class Msa:
       query_sequence: str,
       chain_poly_type: str,
       a3m: str,
-      max_depth: int | None = None,
-      deduplicate: bool = True,
+      max_depth: Optional[int] = None,
+      deduplicate: bool = False,
   ) -> Self:
-    """Parses the single A3M and builds the Msa object."""
-    sequences, descriptions = parsers.parse_fasta(a3m)
-
-    if max_depth is not None and 0 < max_depth < len(sequences):
-      logging.info(
-          'MSA cropped from depth of %d to %d for %s.',
-          len(sequences),
-          max_depth,
-          query_sequence,
-      )
+    """Creates an MSA from an a3m string."""
+    sequences = []
+    deletion_matrix = []
+    descriptions = []
+    
+    for line in a3m.splitlines():
+      if not line:
+        continue
+      if line.startswith('>'):
+        descriptions.append(line[1:].strip())
+      else:
+        sequence = ''
+        deletion_row = []
+        for char in line:
+          if char.isupper():
+            sequence += char
+            deletion_row.append(0)
+          elif char.islower():
+            sequence += char.upper()
+            deletion_row.append(1)
+        sequences.append(sequence)
+        deletion_matrix.append(deletion_row)
+    
+    if deduplicate:
+      unique_sequences = {}
+      for i, sequence in enumerate(sequences):
+        if sequence not in unique_sequences:
+          unique_sequences[sequence] = i
+      
+      sequences = [sequences[i] for i in unique_sequences.values()]
+      deletion_matrix = [deletion_matrix[i] for i in unique_sequences.values()]
+      descriptions = [descriptions[i] for i in unique_sequences.values()]
+    
+    if max_depth is not None:
       sequences = sequences[:max_depth]
+      deletion_matrix = deletion_matrix[:max_depth]
       descriptions = descriptions[:max_depth]
+    
+    return cls(sequences=sequences, deletion_matrix=deletion_matrix, descriptions=descriptions)
 
-    return cls(
-        query_sequence=query_sequence,
-        chain_poly_type=chain_poly_type,
-        sequences=sequences,
-        descriptions=descriptions,
-        deduplicate=deduplicate,
-    )
+  def to_a3m(self) -> str:
+    """Converts the MSA to an a3m string."""
+    a3m_lines = []
+    for sequence, deletion_row, description in zip(
+        self.sequences, self.deletion_matrix, self.descriptions
+    ):
+      a3m_lines.append(f">{description}")
+      a3m_sequence = ""
+      for aa, deletion in zip(sequence, deletion_row):
+        if deletion:
+          a3m_sequence += aa.lower()
+        else:
+          a3m_sequence += aa
+      a3m_lines.append(a3m_sequence)
+    return "\n".join(a3m_lines)
 
   @classmethod
   def from_empty(cls, query_sequence: str, chain_poly_type: str) -> Self:
-    """Creates an empty Msa containing just the query sequence."""
+    """Creates an empty MSA containing just the query sequence."""
     return cls(
-        query_sequence=query_sequence,
-        chain_poly_type=chain_poly_type,
-        sequences=[],
-        descriptions=[],
-        deduplicate=False,
+        sequences=[query_sequence],
+        deletion_matrix=[[0] * len(query_sequence)],
+        descriptions=["Original query"],
     )
 
-  @property
-  def depth(self) -> int:
-    return len(self.sequences)
-
-  def __repr__(self) -> str:
-    return f'Msa({self.depth} sequences, {self.chain_poly_type})'
-
-  def to_a3m(self) -> str:
-    """Returns the MSA in the A3M format."""
-    a3m_lines = []
-    for desc, seq in zip(self.descriptions, self.sequences, strict=True):
-      a3m_lines.append(f'>{desc}')
-      a3m_lines.append(seq)
-    return '\n'.join(a3m_lines) + '\n'
-
   def featurize(self) -> MutableMapping[str, np.ndarray]:
-    """Featurises the MSA and returns a map of feature names to features.
-
-    Returns:
-      A dictionary mapping feature names to values.
-
-    Raises:
-      msa.Error:
-        * If the sequences in the MSA don't have the same length after deletions
-          (lower case letters) are removed.
-        * If the MSA contains an unknown amino acid code.
-        * If there are no sequences after aligning.
-    """
-    try:
-      msa, deletion_matrix = msa_features.extract_msa_features(
-          msa_sequences=self.sequences, chain_poly_type=self.chain_poly_type
-      )
-    except ValueError as e:
-      raise Error(f'Error extracting MSA or deletion features: {e}') from e
-
-    if msa.shape == (0, 0):
-      raise Error(f'Empty MSA feature for {self}')
-
+    """Featurizes the MSA and returns a map of feature names to features."""
+    msa_array, deletion_matrix = msa_features.extract_msa_features(
+        msa_sequences=self.sequences,
+        chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+    )
     species_ids = msa_features.extract_species_ids(self.descriptions)
-
+    
     return {
-        'msa_species_identifiers': np.array(species_ids, dtype=object),
-        'num_alignments': np.array(self.depth, dtype=np.int32),
-        'msa': msa,
+        'msa': msa_array,
         'deletion_matrix_int': deletion_matrix,
+        'msa_species_identifiers': np.array(species_ids, dtype=object),
+        'num_alignments': np.array(len(self.sequences), dtype=np.int32),
     }
 
 
-def get_msa_tool(
-    msa_tool_config: msa_config.JackhmmerConfig | msa_config.NhmmerConfig | msa_config.MMseqs2Config,
-) -> msa_tool.MsaTool:
-  """Returns the requested MSA tool."""
-  match msa_tool_config:
-    case msa_config.JackhmmerConfig():
-      return jackhmmer.Jackhmmer(
-          binary_path=msa_tool_config.binary_path,
-          database_path=msa_tool_config.database_config.path,
-          n_cpu=msa_tool_config.n_cpu,
-          n_iter=msa_tool_config.n_iter,
-          e_value=msa_tool_config.e_value,
-          z_value=msa_tool_config.z_value,
-          max_sequences=msa_tool_config.max_sequences,
-          filter_f1=msa_tool_config.filter_f1,
-          filter_f2=msa_tool_config.filter_f2,
-          filter_f3=msa_tool_config.filter_f3,
-      )
-    case msa_config.NhmmerConfig():
-      return nhmmer.Nhmmer(
-          binary_path=msa_tool_config.binary_path,
-          hmmalign_binary_path=msa_tool_config.hmmalign_binary_path,
-          hmmbuild_binary_path=msa_tool_config.hmmbuild_binary_path,
-          database_path=msa_tool_config.database_config.path,
-          n_cpu=msa_tool_config.n_cpu,
-          e_value=msa_tool_config.e_value,
-          max_sequences=msa_tool_config.max_sequences,
-          alphabet=msa_tool_config.alphabet,
-      )
-    case msa_config.MMseqs2Config():
-      return mmseqs2.MMseqs2(
-          binary_path=msa_tool_config.binary_path,
-          database_path=msa_tool_config.database_path,
-          n_cpu=msa_tool_config.n_cpu,
-          use_gpu=msa_tool_config.use_gpu,
-          e_value=msa_tool_config.e_value,
-          max_sequences=msa_tool_config.max_sequences,
-          sensitivity=msa_tool_config.sensitivity,
-      )
-    case _:
-      raise ValueError(f'Unknown MSA tool config type: {type(msa_tool_config)}')
+def merge_msas(msas: Sequence[Msa], deduplicate: bool = False) -> Msa:
+  """Merges multiple MSAs into a single MSA."""
+  all_sequences = []
+  all_deletion_matrix = []
+  all_descriptions = []
+  
+  for msa in msas:
+    all_sequences.extend(msa.sequences)
+    all_deletion_matrix.extend(msa.deletion_matrix)
+    all_descriptions.extend(msa.descriptions)
+  
+  if deduplicate:
+    unique_sequences = {}
+    for i, sequence in enumerate(all_sequences):
+      if sequence not in unique_sequences:
+        unique_sequences[sequence] = i
+    
+    all_sequences = [all_sequences[i] for i in unique_sequences.values()]
+    all_deletion_matrix = [all_deletion_matrix[i] for i in unique_sequences.values()]
+    all_descriptions = [all_descriptions[i] for i in unique_sequences.values()]
+  
+  return Msa(
+      sequences=all_sequences,
+      deletion_matrix=all_deletion_matrix,
+      descriptions=all_descriptions,
+  )
+
+
+def get_msa_tool(config: Union[msa_config.MMseqs2Config, msa_config.JackhmmerConfig, msa_config.NhmmerConfig]) -> Union[mmseqs2.MMseqs2, jackhmmer.Jackhmmer, nhmmer.Nhmmer]:
+  """Returns the appropriate MSA tool based on the config type."""
+  if isinstance(config, msa_config.MMseqs2Config):
+    return mmseqs2.MMseqs2(
+        binary_path=config.binary_path,
+        database_path=config.database_path,
+        n_cpu=config.n_cpu,
+        e_value=config.e_value,
+        max_sequences=config.max_sequences,
+        sensitivity=config.sensitivity,
+    )
+  elif isinstance(config, msa_config.JackhmmerConfig):
+    return jackhmmer.Jackhmmer(
+        binary_path=config.binary_path,
+        database_path=config.database_path,
+        n_cpu=config.n_cpu,
+        e_value=config.e_value,
+        max_sequences=config.max_sequences,
+    )
+  elif isinstance(config, msa_config.NhmmerConfig):
+    return nhmmer.Nhmmer(
+        binary_path=config.binary_path,
+        database_path=config.database_config.path,
+        n_cpu=config.n_cpu,
+        e_value=config.e_value,
+        max_sequences=config.max_sequences,
+        alphabet=config.alphabet,
+    )
+  else:
+    raise ValueError(f"Unsupported MSA tool config type: {type(config)}")
 
 
 def get_msa(
     target_sequence: str,
     run_config: msa_config.RunConfig,
-    chain_poly_type: str,
     deduplicate: bool = False,
 ) -> Msa:
-  """Computes the MSA for a given query sequence.
-
-  Args:
-    target_sequence: The target amino-acid sequence.
-    run_config: MSA run configuration.
-    chain_poly_type: The type of chain for which to get an MSA.
-    deduplicate: If True, the MSA sequences will be deduplicated in the input
-      order. Lowercase letters (insertions) are ignored when deduplicating.
-
-  Returns:
-    Aligned MSA sequences.
-  """
-
+  """Computes the MSA for a given query sequence."""
   return Msa.from_a3m(
       query_sequence=target_sequence,
-      chain_poly_type=chain_poly_type,
+      chain_poly_type=run_config.chain_poly_type,
       a3m=get_msa_tool(run_config.config).query(target_sequence).a3m,
       max_depth=run_config.crop_size,
       deduplicate=deduplicate,
+  )
+
+
+def get_protein_msa_config(data_pipeline_config, database_path: str) -> msa_config.RunConfig:
+  """Creates the appropriate MSA configuration based on the selected tool."""
+  if data_pipeline_config.msa_tool == "mmseqs2":
+    config = msa_config.MMseqs2Config(
+        binary_path=data_pipeline_config.mmseqs2_binary_path,
+        database_path=database_path,
+        n_cpu=data_pipeline_config.mmseqs2_n_cpu,
+        e_value=0.0001,
+        max_sequences=10000,
+        sensitivity=7.5,
+        gpu_devices=data_pipeline_config.mmseqs2_gpu_devices,  # Pass GPU devices parameter
+    )
+  else:  # jackhmmer
+    config = msa_config.JackhmmerConfig(
+        binary_path=data_pipeline_config.jackhmmer_binary_path,
+        database_path=database_path,
+        n_cpu=data_pipeline_config.jackhmmer_n_cpu,
+        e_value=0.0001,
+        max_sequences=10000,
+    )
+  
+  return msa_config.RunConfig(
+      config=config,
+      chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+      crop_size=None,
   )

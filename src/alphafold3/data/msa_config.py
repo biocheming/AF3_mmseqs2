@@ -88,11 +88,10 @@ class MMseqs2Config:
   binary_path: str
   database_path: str
   n_cpu: int = 8
-  use_gpu: bool = False
-  gpu_server_port: int = 8900
-  e_value: float = 1e-4
-  max_sequences: int = 10_000
+  e_value: float = 0.0001
+  max_sequences: int = 10000
   sensitivity: float = 7.5
+  gpu_devices: tuple[str, ...] | None = None
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True, slots=True)
