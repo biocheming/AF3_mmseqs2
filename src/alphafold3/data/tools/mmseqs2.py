@@ -306,13 +306,11 @@ class MMseqs2(msa_tool.MsaTool):
                 "--max-seqs", str(self.max_sequences),
                 "-s", str(self.sensitivity),
                 "-e", str(self.e_value),
-                "--format-output", "query,target,pident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits",
-                "--format-mode", "2",
                 "--db-load-mode", "2",
                 "--comp-bias-corr", "0",
                 "--mask", "0",
-                "--orf-start-mode", "1",
-                "--exact-kmer-matching", "1"
+                "--exact-kmer-matching", "1",
+                "--use-gpu", "1"
             ]
             run_with_logging(cmd, env=env)
             
@@ -325,8 +323,7 @@ class MMseqs2(msa_tool.MsaTool):
                 result_db,
                 result_m8,
                 "--format-output", "query,target,pident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits",
-                "--db-load-mode", "2",
-                "--format-mode", "2"
+                "--db-load-mode", "2"
             ]
             run_with_logging(cmd, env=env)
             
