@@ -38,6 +38,7 @@ class MMseqs2(msa_tool.MsaTool):
         sensitivity: float = 7.5,
         gpu_devices: tuple[str, ...] | None = None,
     ):
+        self.gpu_db = None  # <--- ADD THIS LINE HERE
         """Initializes the MMseqs2 runner.
 
         Args:
@@ -221,6 +222,51 @@ class MMseqs2(msa_tool.MsaTool):
             elif "CUDA_VISIBLE_DEVICES" in env:
                 del env["CUDA_VISIBLE_DEVICES"]
 
+    def _process_search_results(
+        self,
+        result_m8: str,
+        target_sequence: str,
+        query_db_path: str,
+        tmp_dir: str,
+    ) -> msa_tool.MsaToolResult:
+        """Processes MMseqs2 search results from M8 to A3M format."""
+        # Check if search produced results
+        if not os.path.exists(result_m8) or os.path.getsize(result_m8) == 0:
+            logging.error(f"No search results found in {result_m8}")
+            return msa_tool.MsaToolResult(
+                a3m="",
+                target_sequence=target_sequence,
+                e_value=self.e_value
+            )
+
+        result_a3m_path = os.path.join(tmp_dir, "result.a3m")
+        # In result2msa, the third argument is the target_db, which is self.base_db for CPU search
+        # and gpu_db for GPU search. However, the prompt asks for self.base_db.
+        # For now, sticking to self.base_db as per the prompt for the command structure.
+        # The M8 file (result_m8) is the 4th argument to result2msa, not result_db.
+        cmd = [
+            self.binary_path,
+            "result2msa",
+            query_db_path, # Path to the query database
+            self.base_db,   # Path to the target database (used for generating M8)
+            result_m8,     # Path to the M8 file from convertalis
+            result_a3m_path,
+            "--db-load-mode", "2"
+        ]
+        try:
+            run_with_logging(cmd)
+            with open(result_a3m_path) as f:
+                a3m_content = f.read()
+            # Per prompt, only a3m content for success.
+            # target_sequence and e_value are added for specific error cases.
+            return msa_tool.MsaToolResult(a3m=a3m_content)
+        except subprocess.CalledProcessError as e:
+            logging.error(f"MMseqs2 result2msa failed: {e}")
+            return msa_tool.MsaToolResult(a3m="")
+        except IOError as e:
+            logging.error(f"Failed to read A3M file {result_a3m_path}: {e}")
+            return msa_tool.MsaToolResult(a3m="")
+
     def _cpu_search(
         self, 
         query_path: str, 
@@ -230,7 +276,7 @@ class MMseqs2(msa_tool.MsaTool):
     ) -> msa_tool.MsaToolResult:
         """Search using CPU-only MMseqs2."""
         query_db = os.path.join(tmp_dir, "query_db")
-        result_db = os.path.join(tmp_dir, "result")
+        result_db = os.path.join(tmp_dir, "result") # This is the raw search result, not M8
         
         # Create query DB
         cmd = [self.binary_path, "createdb", query_path, query_db]
@@ -242,7 +288,7 @@ class MMseqs2(msa_tool.MsaTool):
             "search",
             query_db,
             self.base_db,
-            result_db,
+            result_db, # Raw result database from search
             tmp_dir,
             "--threads", str(self.n_cpu),
             "-e", str(self.e_value),
@@ -252,58 +298,39 @@ class MMseqs2(msa_tool.MsaTool):
         ]
         try:
             run_with_logging(cmd)
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError: # Errors in search itself
             logging.error("CPU search failed")
+            # Return MsaToolResult with only a3m="" as per convention in existing code for search failure
             return msa_tool.MsaToolResult(a3m="")
 
-        # Convert results to m8 format
+        # Convert raw search results to m8 format
+        # result_m8 is the path where the M8 file will be written
         cmd = [
             self.binary_path,
             "convertalis",
             query_db,
-            self.base_db,
-            result_db,
-            result_m8,
-            "--format-mode", "0"
+            self.base_db, # Target DB used in search
+            result_db,   # Raw result DB from search
+            result_m8,   # Output M8 file path
+            "--format-mode", "0" # Output format m8
         ]
         try:
             run_with_logging(cmd)
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError: # Errors in M8 conversion
             logging.error("Failed to convert results to m8 format")
             return msa_tool.MsaToolResult(
                 a3m="",
-                target_sequence=target_sequence,
+                target_sequence=target_sequence, # As per existing code for this error
                 e_value=self.e_value
             )
 
-        # Check if search produced results
-        if not os.path.exists(result_m8) or os.path.getsize(result_m8) == 0:
-            logging.error("No search results found")
-            return msa_tool.MsaToolResult(
-                a3m="",
-                target_sequence=target_sequence,
-                e_value=self.e_value
-            )
-
-        # Convert to a3m format
-        result_a3m = os.path.join(tmp_dir, "result.a3m")
-        cmd = [
-            self.binary_path,
-            "result2msa",
-            query_db,
-            self.base_db,
-            result_db,
-            result_a3m,
-            "--db-load-mode", "2"
-        ]
-        try:
-            run_with_logging(cmd)
-            with open(result_a3m) as f:
-                a3m = f.read()
-            return msa_tool.MsaToolResult(a3m=a3m)
-        except (subprocess.CalledProcessError, IOError) as e:
-            logging.error(f"MSA conversion failed: {e}")
-            return msa_tool.MsaToolResult(a3m="")
+        # Process the M8 file to A3M
+        return self._process_search_results(
+            result_m8=result_m8,
+            target_sequence=target_sequence,
+            query_db_path=query_db, # query_db is the path for the query database
+            tmp_dir=tmp_dir
+        )
 
     def query(self, target_sequence: str) -> msa_tool.MsaToolResult:
         """使用MMseqs2搜索序列数据库。
