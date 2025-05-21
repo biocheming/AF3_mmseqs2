@@ -38,6 +38,7 @@ class MMseqs2(msa_tool.MsaTool):
         sensitivity: float = 7.5,
         gpu_devices: tuple[str, ...] | None = None,
     ):
+        self.gpu_db = None  # <--- ADD THIS LINE HERE
         """Initializes the MMseqs2 runner.
 
         Args:
